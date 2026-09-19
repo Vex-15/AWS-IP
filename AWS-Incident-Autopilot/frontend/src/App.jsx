@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import {
   ShieldAlert, TriangleAlert, CheckCircle2, ServerCog, Cpu,
   CheckCircle, XCircle, Info, Loader2, Radio, Zap, TrendingDown,
@@ -8,6 +8,8 @@ import {
   BarChart, Bar, CartesianGrid, ReferenceLine,
 } from 'recharts';
 import './index.css';
+
+const AgentTopology = lazy(() => import('./components/AgentTopology.jsx'));
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
@@ -426,6 +428,13 @@ export default function App() {
 
               <AgentStepper stepIndex={stepIndex} resolved={resolved} />
 
+              <div className="panel topology-panel">
+                <div className="panel-label"><Cpu size={13} /> Agent tools</div>
+                <Suspense fallback={<div className="topology-fallback" />}>
+                  <AgentTopology stepIndex={stepIndex} resolved={resolved} compact />
+                </Suspense>
+              </div>
+
               <div className="chart-grid">
                 <div className="panel">
                   <div className="panel-label"><ServerCog size={13} /> p95 latency, last hour</div>
@@ -564,7 +573,9 @@ export default function App() {
             </div>
           ) : (
             <div className="empty-state">
-              <div className="empty-mark"><ServerCog size={26} /></div>
+              <Suspense fallback={<div className="topology-fallback topology-fallback-lg" />}>
+                <AgentTopology stepIndex={-1} resolved={false} />
+              </Suspense>
               <h2>Select a signal to start an investigation</h2>
               <p>Or trigger a demo incident from the sidebar to watch the agent detect, diagnose, and fix it end to end.</p>
             </div>

@@ -39,7 +39,7 @@ exports.handler = async (event) => {
       functionName: `${this.stackName}-DemoSlowLambda`,
       memorySize: 128,
       timeout: cdk.Duration.seconds(10),
-      reservedConcurrentExecutions: 5,
+
       tracing: lambda.Tracing.ACTIVE, // Enable X-Ray
     });
 
