@@ -1104,3 +1104,51 @@ button {
 .toast.info svg {
   color: var(--cyan);
 }
+
+/* ── Parsed Case File ────────────────────────────────────────────────── */
+
+.case-section {
+  margin-bottom: 24px;
+}
+
+.case-section:last-child {
+  margin-bottom: 0;
+}
+
+.evidence-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.evidence-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--bg-shade);
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  font-size: 0.9rem;
+}
+
+.evidence-icon {
+  display: flex;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.evidence-icon.good {
+  color: var(--green);
+}
+
+.evidence-icon.warn {
+  color: var(--amber);
+}
+
+.text-warn {
+  color: var(--amber);
+}

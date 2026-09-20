@@ -24,34 +24,64 @@ const STEPS = [
   { key: 'verified', label: 'Verified' },
 ];
 
-// ── Tiny markdown-lite renderer for the agent's free-text responses ─────
-// The agent writes **bold** section headers and plain paragraphs. Render
-// those distinctly instead of dumping one grey wall of text.
+// ── Structured Agent Response Parser ──────────────────────────────────────
+function parseAgentResponse(text) {
+  if (!text) return { evidence: [], rootCause: '', isInsufficient: false };
+  
+  // Strip <thinking>...</thinking> tags (including multiline)
+  const cleanText = text.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
+
+  // Extract sections based on the markdown headers enforced in the prompt
+  const evidenceMatch = cleanText.match(/### Evidence Summary\n([\s\S]*?)(?:###|$)/);
+  const rootCauseMatch = cleanText.match(/### Root Cause\n([\s\S]*?)(?:###|$)/);
+  
+  const rawEvidence = evidenceMatch ? evidenceMatch[1].trim() : '';
+  const rootCause = rootCauseMatch ? rootCauseMatch[1].trim() : cleanText;
+  
+  // Determine if evidence is insufficient based on keywords
+  const isInsufficient = /insufficient/i.test(rootCause) || /insufficient/i.test(rawEvidence);
+
+  // Parse evidence lines into bullet points
+  const evidence = rawEvidence
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l.startsWith('-'))
+    .map(l => l.substring(1).trim());
+
+  return { evidence, rootCause, isInsufficient };
+}
+
+// ── Polished Case File Renderer ──────────────────────────────────────────
 function CaseFileText({ text }) {
   if (!text) return null;
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  const nodes = [];
-  let paragraph = [];
+  const { evidence, rootCause, isInsufficient } = parseAgentResponse(text);
 
-  const flush = (key) => {
-    if (paragraph.length) {
-      nodes.push(<p key={key}>{paragraph.join(' ')}</p>);
-      paragraph = [];
-    }
-  };
-
-  lines.forEach((line, i) => {
-    const boldMatch = line.match(/^\*\*(.+?)\*\*:?$/);
-    if (boldMatch) {
-      flush(`p${i}`);
-      nodes.push(<div className="case-file-heading" key={`h${i}`}>{boldMatch[1]}</div>);
-    } else {
-      paragraph.push(line.replace(/\*\*(.+?)\*\*/g, '$1'));
-    }
-  });
-  flush('pEnd');
-
-  return <div className="case-file">{nodes}</div>;
+  return (
+    <div className="case-file">
+      {evidence.length > 0 && (
+        <div className="case-section">
+          <div className="case-file-heading">Evidence Summary</div>
+          <ul className="evidence-list">
+            {evidence.map((item, i) => {
+              const noData = /0|None|No traces|NO DATAPOINTS/i.test(item) || isInsufficient;
+              return (
+                <li key={i} className="evidence-item">
+                  <span className={`evidence-icon ${noData ? 'warn' : 'good'}`}>
+                    {noData ? <TriangleAlert size={14} /> : <CheckCircle2 size={14} />}
+                  </span>
+                  <span>{item.replace(/\*\*(.*?)\*\*/g, '$1')}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+      <div className="case-section">
+        <div className="case-file-heading">Root Cause Analysis</div>
+        <p className={isInsufficient ? "text-warn" : ""}>{rootCause.replace(/\*\*(.*?)\*\*/g, '$1')}</p>
+      </div>
+    </div>
+  );
 }
 
 // Looks for lines like "memorySize: 128MB -> 512MB" in the agent's fix
@@ -202,7 +232,11 @@ export default function App() {
   const triggerDemoIncident = () => {
     fetch(API_URL + "/incidents/trigger", { method: 'POST' })
       .then(res => res.json())
-      .then(data => addToast(data.message || "Demo incident triggered.", 'success'))
+      .then(data => {
+        addToast(data.message || "Demo incident triggered.", 'success');
+        // Re-fetch incidents after a short delay so the alarm appears in the sidebar
+        setTimeout(fetchIncidents, 2000);
+      })
       .catch(err => { console.error(err); addToast("Could not trigger the demo incident.", 'error'); });
   };
 
@@ -218,6 +252,8 @@ export default function App() {
     fetchMetrics(incident.functionName);
 
     const functionName = incident.functionName || 'unknown';
+
+    // Start the async agent invocation
     fetch(API_URL + "/agent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -228,8 +264,53 @@ export default function App() {
     })
       .then(res => res.json())
       .then(data => {
-        setInvestigation({ agentResponse: data.agentResponse || "No response from agent." });
-        setLoading(false);
+        if (data.status === "accepted" || data.jobId) {
+          // Poll for results
+          const jobId = data.jobId || incident.id;
+          const pollInterval = setInterval(() => {
+            fetch(API_URL + "/agent", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "poll",
+                sessionId: jobId,
+              })
+            })
+              .then(r => r.json())
+              .then(pollData => {
+                if (pollData.status === "done") {
+                  clearInterval(pollInterval);
+                  setInvestigation({ agentResponse: pollData.agentResponse || "Investigation complete." });
+                  setLoading(false);
+                } else if (pollData.status === "error") {
+                  clearInterval(pollInterval);
+                  setInvestigation({ agentResponse: pollData.error || pollData.agentResponse || "Agent encountered an error." });
+                  setLoading(false);
+                }
+                // if "running", keep polling
+              })
+              .catch(err => {
+                console.error("Poll error:", err);
+                // Don't stop polling on network glitch
+              });
+          }, 3000);
+
+          // Safety: stop polling after 5 minutes
+          setTimeout(() => {
+            clearInterval(pollInterval);
+            if (!investigation) {
+              setLoading(false);
+              addToast("Agent is taking too long. Check CloudWatch logs.", 'error');
+            }
+          }, 300000);
+        } else if (data.agentResponse) {
+          // Direct response (shouldn't happen but handle it)
+          setInvestigation({ agentResponse: data.agentResponse });
+          setLoading(false);
+        } else {
+          setInvestigation({ agentResponse: "No response from agent." });
+          setLoading(false);
+        }
       })
       .catch(err => {
         console.error(err);
@@ -242,18 +323,40 @@ export default function App() {
   const handleSimulate = () => {
     setLoading(true);
     const functionName = selectedIncident?.functionName || 'unknown';
+    const simSessionId = `${selectedIncident?.id}-sim-${Date.now()}`;
     fetch(API_URL + "/agent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         prompt: `Based on your investigation, what specific configuration changes do you propose for "${functionName}"? Explain the expected impact. Do NOT apply the fix yet — just propose it.`,
-        sessionId: selectedIncident?.id,
+        sessionId: simSessionId,
       })
     })
       .then(res => res.json())
       .then(data => {
-        setSimulation({ response: data.agentResponse || "No simulation response." });
-        setLoading(false);
+        if (data.status === "accepted" || data.jobId) {
+          const jobId = data.jobId || simSessionId;
+          const pollInterval = setInterval(() => {
+            fetch(API_URL + "/agent", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "poll", sessionId: jobId })
+            })
+              .then(r => r.json())
+              .then(pollData => {
+                if (pollData.status === "done" || pollData.status === "error") {
+                  clearInterval(pollInterval);
+                  setSimulation({ response: pollData.agentResponse || pollData.error || "No simulation response." });
+                  setLoading(false);
+                }
+              })
+              .catch(err => console.error("Poll error:", err));
+          }, 3000);
+          setTimeout(() => { clearInterval(pollInterval); setLoading(false); }, 300000);
+        } else {
+          setSimulation({ response: data.agentResponse || "No simulation response." });
+          setLoading(false);
+        }
       })
       .catch(err => { console.error(err); setLoading(false); addToast("Couldn't get a fix proposal.", 'error'); });
   };
@@ -262,30 +365,57 @@ export default function App() {
   const handleApply = () => {
     setApplying(true);
     setVerifySeconds(0);
-    // Mark "now" on the real metrics timeline so the chart can show exactly
-    // where the fix landed, once the post-fix data comes back.
     setAppliedLabel(new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }));
     const functionName = selectedIncident?.functionName || 'unknown';
+    const applySessionId = `${selectedIncident?.id}-apply-${Date.now()}`;
 
     fetch(API_URL + "/agent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         prompt: `I approve the fix. Apply it now to "${functionName}" using the applyFix tool. Then call verifyRecovery to wait ~60 seconds and check whether the metrics have actually improved.`,
-        sessionId: selectedIncident?.id,
+        sessionId: applySessionId,
       })
     })
       .then(res => res.json())
       .then(data => {
-        setResolved(true);
-        setApplying(false);
-        setInvestigation(prev => ({
-          ...prev,
-          agentResponse: (prev?.agentResponse || '') + '\n\n**Post-fix verification**\n' + (data.agentResponse || 'No verification response.'),
-        }));
-        fetchMetrics(functionName);
-        fetchIncidents();
-        addToast("Fix applied and verified.", 'success');
+        if (data.status === "accepted" || data.jobId) {
+          const jobId = data.jobId || applySessionId;
+          const pollInterval = setInterval(() => {
+            fetch(API_URL + "/agent", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "poll", sessionId: jobId })
+            })
+              .then(r => r.json())
+              .then(pollData => {
+                if (pollData.status === "done" || pollData.status === "error") {
+                  clearInterval(pollInterval);
+                  setResolved(true);
+                  setApplying(false);
+                  setInvestigation(prev => ({
+                    ...prev,
+                    agentResponse: (prev?.agentResponse || '') + '\n\n**Post-fix verification**\n' + (pollData.agentResponse || 'No verification response.'),
+                  }));
+                  fetchMetrics(functionName);
+                  fetchIncidents();
+                  addToast("Fix applied and verified.", 'success');
+                }
+              })
+              .catch(err => console.error("Poll error:", err));
+          }, 3000);
+          setTimeout(() => { clearInterval(pollInterval); setApplying(false); }, 300000);
+        } else {
+          setResolved(true);
+          setApplying(false);
+          setInvestigation(prev => ({
+            ...prev,
+            agentResponse: (prev?.agentResponse || '') + '\n\n**Post-fix verification**\n' + (data.agentResponse || 'No verification response.'),
+          }));
+          fetchMetrics(functionName);
+          fetchIncidents();
+          addToast("Fix applied and verified.", 'success');
+        }
       })
       .catch(err => { console.error(err); setApplying(false); addToast("The fix could not be applied.", 'error'); });
   };
@@ -520,13 +650,21 @@ export default function App() {
                     <CaseFileText text={investigation.agentResponse} />
                   </div>
 
-                  {!simulation && !resolved && (
-                    <div className="action-row">
-                      <button className="btn btn-primary" onClick={handleSimulate} disabled={loading}>
-                        {loading ? 'Proposing fix…' : 'Propose fix'}
-                      </button>
-                    </div>
-                  )}
+                  {!simulation && !resolved && (() => {
+                    const { isInsufficient } = parseAgentResponse(investigation.agentResponse);
+                    return (
+                      <div className="action-row">
+                        <button 
+                          className="btn btn-primary" 
+                          onClick={handleSimulate} 
+                          disabled={loading || isInsufficient}
+                          title={isInsufficient ? "Cannot propose fix with insufficient evidence" : ""}
+                        >
+                          {loading ? 'Proposing fix…' : isInsufficient ? 'Insufficient Evidence' : 'Propose fix'}
+                        </button>
+                      </div>
+                    );
+                  })()}
 
                   {simulation && (
                     <div className="panel fix-panel">

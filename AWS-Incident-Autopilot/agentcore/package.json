@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/main.js"
+    "build": "tsc && node scripts/postbuild.cjs",
+    "start": "node dist/main.mjs"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch": "^3.700.0",
