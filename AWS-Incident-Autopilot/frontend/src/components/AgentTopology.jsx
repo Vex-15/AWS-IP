@@ -91,6 +91,15 @@ export default function AgentTopology({ stepIndex = -1, resolved = false, compac
         );
         rig.add(coreGlow);
 
+        // One-shot "verified" shockwave — fires once when resolved flips true,
+        // not a looping decoration. See renderFrame for the trigger.
+        const ring = new THREE.Mesh(
+            new THREE.RingGeometry(0.66, 0.72, 48),
+            new THREE.MeshBasicMaterial({ color: GREEN, transparent: true, opacity: 0, side: THREE.DoubleSide })
+        );
+        ring.visible = false;
+        rig.add(ring);
+
         // Satellite nodes + connecting lines
         const radius = 2.35;
         const nodes = TOOLS.map((tool, i) => {
@@ -115,6 +124,37 @@ export default function AgentTopology({ stepIndex = -1, resolved = false, compac
             return { mesh, line, base: { x, y, z } };
         });
 
+        // Small traveling glow along the line to an active node — shows a tool
+        // call actually in flight, not just a color change on the endpoint.
+        const pulses = TOOLS.map(() => {
+            const mesh = new THREE.Mesh(
+                new THREE.SphereGeometry(0.055, 8, 8),
+                new THREE.MeshBasicMaterial({ color: CYAN, transparent: true, opacity: 0 })
+            );
+            mesh.visible = false;
+            rig.add(mesh);
+            return mesh;
+        });
+
+        // HTML labels projected from each node's 3D position — the tool names
+        // already existed in TOOLS but were never actually shown anywhere.
+        // Skipped in compact mode to keep the small widget glanceable.
+        let labelLayer = null;
+        let labelEls = [];
+        if (!compact) {
+            labelLayer = document.createElement('div');
+            labelLayer.className = 'topology-label-layer';
+            mount.appendChild(labelLayer);
+            labelEls = TOOLS.map((tool) => {
+                const el = document.createElement('span');
+                el.className = 'topology-label';
+                el.textContent = tool.label;
+                labelLayer.appendChild(el);
+                return el;
+            });
+        }
+        const projected = new THREE.Vector3();
+
         // Pointer parallax
         const pointer = { x: 0, y: 0 };
         const onPointerMove = (e) => {
@@ -138,6 +178,8 @@ export default function AgentTopology({ stepIndex = -1, resolved = false, compac
 
         let raf;
         const clock = new THREE.Clock();
+        let prevResolved = resolved;
+        let ringStart = null;
 
         const renderFrame = () => {
             const t = clock.getElapsedTime();
@@ -155,9 +197,9 @@ export default function AgentTopology({ stepIndex = -1, resolved = false, compac
             const anyActive = si === 1 || si === 4;
             const coreColor = res ? GREEN : anyActive ? CYAN : new THREE.Color('#2f6f6b');
             core.material.color.lerp(coreColor, 0.08);
-            const pulse = 1 + Math.sin(t * 3) * (anyActive ? 0.06 : 0.02);
-            core.scale.setScalar(pulse);
-            coreGlow.scale.setScalar(pulse);
+            const corePulse = 1 + Math.sin(t * 3) * (anyActive ? 0.06 : 0.02);
+            core.scale.setScalar(corePulse);
+            coreGlow.scale.setScalar(corePulse);
 
             nodes.forEach((n, i) => {
                 const state = nodeState(i, si, res);
@@ -171,7 +213,52 @@ export default function AgentTopology({ stepIndex = -1, resolved = false, compac
 
                 const scale = state === 'active' ? 1 + Math.sin(t * 5 + i) * 0.18 : 1;
                 n.mesh.scale.setScalar(scale);
+
+                // Traveling glow while this tool call is in flight
+                const pulse = pulses[i];
+                if (!reduceMotion && state === 'active') {
+                    const tp = (t * 1.1 + i * 0.18) % 1;
+                    pulse.position.lerpVectors(new THREE.Vector3(0, 0, 0), n.mesh.position, tp);
+                    pulse.material.opacity = Math.sin(tp * Math.PI) * 0.9;
+                    pulse.visible = true;
+                } else {
+                    pulse.visible = false;
+                }
             });
+
+            // One-shot shockwave the moment resolved flips true — a single
+            // orchestrated payoff, not a repeating loop.
+            if (!reduceMotion && res && !prevResolved) ringStart = t;
+            prevResolved = res;
+            if (ringStart !== null) {
+                const elapsed = t - ringStart;
+                if (elapsed > 1.1) {
+                    ring.visible = false;
+                    ringStart = null;
+                } else {
+                    ring.visible = true;
+                    ring.quaternion.copy(camera.quaternion);
+                    const k = elapsed / 1.1;
+                    ring.scale.setScalar(1 + k * 3.2);
+                    ring.material.opacity = (1 - k) * 0.8;
+                }
+            }
+
+            // Project each node's live 3D position onto the 2D label layer
+            if (labelLayer) {
+                const w = mount.clientWidth || 1;
+                const h = mount.clientHeight || 1;
+                nodes.forEach((n, i) => {
+                    n.mesh.getWorldPosition(projected);
+                    projected.project(camera);
+                    const x = (projected.x * 0.5 + 0.5) * w;
+                    const y = (-projected.y * 0.5 + 0.5) * h;
+                    const depthFade = THREE.MathUtils.clamp(1 - Math.abs(projected.z) * 0.6, 0.4, 1);
+                    const el = labelEls[i];
+                    el.style.transform = `translate(${x}px, ${y}px) translate(-50%, 10px)`;
+                    el.style.opacity = String(n.mesh.material.opacity * depthFade);
+                });
+            }
 
             renderer.render(scene, camera);
             raf = requestAnimationFrame(renderFrame);
@@ -188,15 +275,42 @@ export default function AgentTopology({ stepIndex = -1, resolved = false, compac
             core.material.dispose();
             coreGlow.geometry.dispose();
             coreGlow.material.dispose();
+            ring.geometry.dispose();
+            ring.material.dispose();
             nodes.forEach(n => {
                 n.mesh.geometry.dispose();
                 n.mesh.material.dispose();
                 n.line.geometry.dispose();
                 n.line.material.dispose();
             });
+            pulses.forEach(p => {
+                p.geometry.dispose();
+                p.material.dispose();
+            });
             if (renderer.domElement.parentNode === mount) mount.removeChild(renderer.domElement);
+            if (labelLayer && labelLayer.parentNode === mount) mount.removeChild(labelLayer);
         };
     }, []); // scene is built once; live state flows through stateRef
+
+    // Canvas is purely visual — give screen readers a text summary of what's
+    // actually happening, kept in sync with the props that drive the scene.
+    useEffect(() => {
+        const mount = mountRef.current;
+        if (!mount) return;
+        mount.setAttribute('role', 'img');
+        mount.setAttribute(
+            'aria-label',
+            resolved
+                ? 'Agent topology: incident verified as fixed.'
+                : stepIndex < 0
+                    ? 'Agent topology: idle, no active incident.'
+                    : stepIndex === 1
+                        ? 'Agent topology: investigating via CloudWatch, Logs, X-Ray, and Lambda Config.'
+                        : stepIndex === 4
+                            ? 'Agent topology: applying fix.'
+                            : 'Agent topology: agent working.'
+        );
+    }, [stepIndex, resolved]);
 
     return <div ref={mountRef} className={`topology-canvas ${compact ? 'is-compact' : ''}`} />;
 }

@@ -983,10 +983,29 @@ button {
   width: 100%;
   height: 280px;
   touch-action: none;
+  position: relative;
+  overflow: hidden;
 }
 
 .topology-canvas.is-compact {
   height: 168px;
+}
+
+.topology-label-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.topology-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  will-change: transform, opacity;
 }
 
 .topology-fallback {

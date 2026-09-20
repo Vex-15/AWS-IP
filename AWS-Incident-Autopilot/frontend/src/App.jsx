@@ -13,6 +13,15 @@ const AgentTopology = lazy(() => import('./components/AgentTopology.jsx'));
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
+// Single source of truth for turning a timestamp into the "2:47 PM"-style
+// label used on the metrics charts AND the "fix applied" marker. The backend
+// sends raw ISO timestamps for exactly this reason — formatting must happen
+// once, here, in the viewer's own timezone, or the chart's x-axis labels and
+// the reference line (matched by exact string equality) silently drift apart
+// whenever the Lambda's runtime timezone differs from the browser's.
+const formatChartTime = (isoOrDate) =>
+  new Date(isoOrDate).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+
 // The agent's real workflow, always in this order. Used to render the
 // stepper and to figure out which stage the current incident is in.
 const STEPS = [
@@ -27,17 +36,17 @@ const STEPS = [
 // ── Structured Agent Response Parser ──────────────────────────────────────
 function parseAgentResponse(text) {
   if (!text) return { evidence: [], rootCause: '', isInsufficient: false };
-  
+
   // Strip <thinking>...</thinking> tags (including multiline)
   const cleanText = text.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
 
   // Extract sections based on the markdown headers enforced in the prompt
   const evidenceMatch = cleanText.match(/### Evidence Summary\n([\s\S]*?)(?:###|$)/);
   const rootCauseMatch = cleanText.match(/### Root Cause\n([\s\S]*?)(?:###|$)/);
-  
+
   const rawEvidence = evidenceMatch ? evidenceMatch[1].trim() : '';
   const rootCause = rootCauseMatch ? rootCauseMatch[1].trim() : cleanText;
-  
+
   // Determine if evidence is insufficient based on keywords
   const isInsufficient = /insufficient/i.test(rootCause) || /insufficient/i.test(rawEvidence);
 
@@ -218,8 +227,8 @@ export default function App() {
     fetch(API_URL + `/incidents/metrics?functionName=${encodeURIComponent(functionName)}`)
       .then(res => res.json())
       .then(data => {
-        setLatencyData(data.durationData || []);
-        setThrottleData(data.throttleData || []);
+        setLatencyData((data.durationData || []).map(d => ({ time: formatChartTime(d.timestamp), latency: d.latency })));
+        setThrottleData((data.throttleData || []).map(d => ({ time: formatChartTime(d.timestamp), throttles: d.throttles })));
         setLoadingMetrics(false);
       })
       .catch(err => {
@@ -365,7 +374,7 @@ export default function App() {
   const handleApply = () => {
     setApplying(true);
     setVerifySeconds(0);
-    setAppliedLabel(new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }));
+    setAppliedLabel(formatChartTime(new Date()));
     const functionName = selectedIncident?.functionName || 'unknown';
     const applySessionId = `${selectedIncident?.id}-apply-${Date.now()}`;
 
@@ -595,7 +604,7 @@ export default function App() {
                               label={{ value: 'fix applied', position: 'insideTopLeft', fill: '#35d6cd', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' }}
                             />
                           )}
-                          <Area type="monotone" dataKey="latency" stroke={resolved ? '#4ade80' : '#f5a623'} strokeWidth={2} fillOpacity={1} fill="url(#colorLatency)" />
+                          <Area type="monotone" dataKey="latency" stroke={resolved ? '#4ade80' : '#f5a623'} strokeWidth={2} fillOpacity={1} fill="url(#colorLatency)" connectNulls />
                         </AreaChart>
                       </ResponsiveContainer>
                     ) : (
@@ -654,9 +663,9 @@ export default function App() {
                     const { isInsufficient } = parseAgentResponse(investigation.agentResponse);
                     return (
                       <div className="action-row">
-                        <button 
-                          className="btn btn-primary" 
-                          onClick={handleSimulate} 
+                        <button
+                          className="btn btn-primary"
+                          onClick={handleSimulate}
                           disabled={loading || isInsufficient}
                           title={isInsufficient ? "Cannot propose fix with insufficient evidence" : ""}
                         >

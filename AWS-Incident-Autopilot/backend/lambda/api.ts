@@ -282,76 +282,48 @@ exports.handler = async (event: any) => {
         ),
       ]);
 
-      // Sort datapoints chronologically
-      const sortByTime = (
-        arr: any[]
-      ) =>
-        arr.sort(
-          (
-            a: any,
-            b: any
-          ) =>
-            new Date(
-              a.Timestamp
-            ).getTime() -
-            new Date(
-              b.Timestamp
-            ).getTime()
-        );
+      // Both metrics are mapped onto the SAME per-minute timeline, and we
+      // return raw ISO timestamps (not pre-formatted local-time strings).
+      // Formatting time as a string here would bake in the Lambda runtime's
+      // timezone (usually UTC), which then silently fails to match anything
+      // formatted in the browser's timezone on the frontend (e.g. the
+      // "fix applied" marker) — always ship timestamps, format at the edge.
+      const bucketKey = (d: Date | string) => new Date(d).toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
 
-      // Duration / P95 data
-      const durationData =
-        sortByTime(
-          durationResp.Datapoints || []
-        ).map(
-          (dp: any) => ({
-            time:
-              new Date(
-                dp.Timestamp
-              ).toLocaleTimeString(
-                "en-US",
-                {
-                  hour:
-                    "2-digit",
+      const timeline: Date[] = [];
+      for (let ts = startTime.getTime(); ts < endTime.getTime(); ts += 60_000) {
+        timeline.push(new Date(ts));
+      }
 
-                  minute:
-                    "2-digit",
-                }
-              ),
+      const durationByBucket = new Map(
+        (durationResp.Datapoints || []).map((dp: any) => [
+          bucketKey(dp.Timestamp),
+          Math.round(dp.ExtendedStatistics?.p95 ?? 0),
+        ])
+      );
+      const throttleByBucket = new Map(
+        (throttleResp.Datapoints || []).map((dp: any) => [bucketKey(dp.Timestamp), dp.Sum ?? 0])
+      );
 
-            latency:
-              Math.round(
-                dp
-                  .ExtendedStatistics
-                  ?.p95 ?? 0
-              ),
-          })
-        );
+      // Duration / P95 data — a minute with no invocations is a real gap
+      // (null), not a fake 0ms latency, so it isn't drawn as "instant".
+      const durationData = timeline.map((ts) => {
+        const key = bucketKey(ts);
+        return {
+          timestamp: ts.toISOString(),
+          latency: durationByBucket.has(key) ? durationByBucket.get(key) : null,
+        };
+      });
 
-      // Throttle data
-      const throttleData =
-        sortByTime(
-          throttleResp.Datapoints || []
-        ).map(
-          (dp: any) => ({
-            time:
-              new Date(
-                dp.Timestamp
-              ).toLocaleTimeString(
-                "en-US",
-                {
-                  hour:
-                    "2-digit",
-
-                  minute:
-                    "2-digit",
-                }
-              ),
-
-            throttles:
-              dp.Sum ?? 0,
-          })
-        );
+      // Throttle data — a minute with no throttle datapoint genuinely means
+      // zero throttles, so 0 is the correct fill (unlike latency above).
+      const throttleData = timeline.map((ts) => {
+        const key = bucketKey(ts);
+        return {
+          timestamp: ts.toISOString(),
+          throttles: throttleByBucket.has(key) ? throttleByBucket.get(key) : 0,
+        };
+      });
 
       return {
         statusCode: 200,
