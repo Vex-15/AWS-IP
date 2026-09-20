@@ -19,8 +19,14 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 // once, here, in the viewer's own timezone, or the chart's x-axis labels and
 // the reference line (matched by exact string equality) silently drift apart
 // whenever the Lambda's runtime timezone differs from the browser's.
-const formatChartTime = (isoOrDate) =>
-  new Date(isoOrDate).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+const formatChartTime = (isoOrDate) => {
+  if (!isoOrDate) return 'Invalid Date';
+  let d = new Date(isoOrDate);
+  if (isNaN(d.valueOf()) && !isNaN(Number(isoOrDate))) {
+    d = new Date(Number(isoOrDate));
+  }
+  return isNaN(d.valueOf()) ? 'Invalid Date' : d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+};
 
 // The agent's real workflow, always in this order. Used to render the
 // stepper and to figure out which stage the current incident is in.
@@ -35,60 +41,254 @@ const STEPS = [
 
 // ── Structured Agent Response Parser ──────────────────────────────────────
 function parseAgentResponse(text) {
-  if (!text) return { evidence: [], rootCause: '', isInsufficient: false };
+  if (!text) return { sections: {}, isInsufficient: false, rawText: '' };
 
   // Strip <thinking>...</thinking> tags (including multiline)
   const cleanText = text.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
 
-  // Extract sections based on the markdown headers enforced in the prompt
-  const evidenceMatch = cleanText.match(/### Evidence Summary\n([\s\S]*?)(?:###|$)/);
-  const rootCauseMatch = cleanText.match(/### Root Cause\n([\s\S]*?)(?:###|$)/);
+  // Extract named sections by ### headers
+  const sectionRegex = /### ([\w\s]+)\n([\s\S]*?)(?=### |\s*$)/g;
+  const sections = {};
+  let match;
+  while ((match = sectionRegex.exec(cleanText)) !== null) {
+    const key = match[1].trim().toLowerCase().replace(/\s+/g, '_');
+    sections[key] = match[2].trim();
+  }
 
-  const rawEvidence = evidenceMatch ? evidenceMatch[1].trim() : '';
-  const rootCause = rootCauseMatch ? rootCauseMatch[1].trim() : cleanText;
+  // Handle old agent format gracefully so the new UI still works for old payloads
+  if (sections.evidence_summary && !sections.evidence) {
+    sections.evidence = sections.evidence_summary;
+  }
+  if (sections.proposed_fix && !sections.recommended_action) {
+    sections.recommended_action = sections.proposed_fix;
+  }
 
   // Determine if evidence is insufficient based on keywords
-  const isInsufficient = /insufficient/i.test(rootCause) || /insufficient/i.test(rawEvidence);
+  const isInsufficient = /insufficient evidence/i.test(cleanText) || /insufficient/i.test(sections.root_cause || '');
 
-  // Parse evidence lines into bullet points
-  const evidence = rawEvidence
-    .split('\n')
-    .map(l => l.trim())
-    .filter(l => l.startsWith('-'))
-    .map(l => l.substring(1).trim());
+  // Parse bullet items from a section string
+  const parseBullets = (str) =>
+    str ? str.split('\n').map(l => l.trim()).filter(l => /^[-•]/.test(l)).map(l => l.replace(/^[-•]\s*/, '').replace(/\*\*(.*?)\*\*/g, '$1')) : [];
 
-  return { evidence, rootCause, isInsufficient };
+  // Parse numbered items
+  const parseNumbered = (str) =>
+    str ? str.split('\n').map(l => l.trim()).filter(l => /^\d+\./.test(l)).map(l => l.replace(/^\d+\.\s*/, '').replace(/\*\*(.*?)\*\*/g, '$1')) : [];
+
+  // Extract confidence percentage or level
+  const confidenceMatch = (sections.root_cause || '').match(/Confidence:\s*(High|Medium|Low|\d+%?)/i);
+  let confidence = null;
+  let confidenceStr = '';
+  if (confidenceMatch) {
+    const val = confidenceMatch[1].replace('%', '');
+    if (val.toLowerCase() === 'high') confidence = 90;
+    else if (val.toLowerCase() === 'medium') confidence = 50;
+    else if (val.toLowerCase() === 'low') confidence = 20;
+    else confidence = parseInt(val, 10);
+    confidenceStr = confidenceMatch[1];
+  }
+
+  // Extract root cause headline (skip confidence/alternative lines)
+  const rootCauseLines = (sections.root_cause || '').split('\n').filter(l => l.trim() && !/Confidence:/i.test(l) && !/Alternative explanation/i.test(l));
+  const rootCauseHeadline = rootCauseLines.length > 0
+    ? rootCauseLines.join(' ').replace(/\*\*(.*?)\*\*/g, '$1').trim()
+    : '';
+
+  // Extract incident info
+  const lambdaMatch = (sections.incident || '').match(/Lambda:\s*(.+)/i);
+  const symptomMatch = (sections.incident || '').match(/Symptom:\s*(.+)/i);
+
+  // Extract risk level
+  const riskMatch = (sections.risk || '').match(/^(Low|Medium|High)\s*[—–-]\s*(.+)/i);
+
+  // Parse recommended action: separate description from experiment steps
+  const actionText = sections.recommended_action || '';
+  const experimentIdx = actionText.search(/Proposed experiment:/i);
+  const actionDescription = experimentIdx >= 0 ? actionText.slice(0, experimentIdx).trim() : actionText;
+  const experimentSteps = experimentIdx >= 0
+    ? actionText.slice(experimentIdx).split('\n').filter(l => /^[-•→]/.test(l.trim())).map(l => l.trim().replace(/^[-•→]\s*/, ''))
+    : [];
+
+  return {
+    sections,
+    isInsufficient,
+    rawText: cleanText,
+    incident: {
+      lambda: lambdaMatch ? lambdaMatch[1].trim() : null,
+      symptom: symptomMatch ? symptomMatch[1].trim() : null,
+    },
+    configuration: parseBullets(sections.configuration),
+    evidence: parseBullets(sections.evidence),
+    rootCauseHeadline,
+    confidenceStr,
+    why: parseNumbered(sections.why),
+    actionDescription,
+    experimentSteps,
+    expectedResult: parseBullets(sections.expected_result),
+    risk: riskMatch ? { level: riskMatch[1], reason: riskMatch[2].trim() } : null,
+  };
 }
 
 // ── Polished Case File Renderer ──────────────────────────────────────────
 function CaseFileText({ text }) {
   if (!text) return null;
-  const { evidence, rootCause, isInsufficient } = parseAgentResponse(text);
+  const parsed = parseAgentResponse(text);
+
+  // Fallback: if we couldn't extract any sections, render clean paragraphs
+  if (!parsed.rootCauseHeadline && !parsed.evidence.length && !parsed.sections.root_cause) {
+    // Strip thinking tags even in fallback
+    const clean = text.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').replace(/### /g, '').replace(/\*\*(.*?)\*\*/g, '$1').trim();
+    return (
+      <div className="case-file">
+        {clean.split('\n\n').filter(Boolean).map((para, i) => (
+          <p key={i} className="rca-body-text">{para.trim()}</p>
+        ))}
+      </div>
+    );
+  }
+
+  const riskClass = parsed.risk
+    ? parsed.risk.level.toLowerCase() === 'low' ? 'risk-low'
+      : parsed.risk.level.toLowerCase() === 'medium' ? 'risk-med'
+        : 'risk-high'
+    : '';
 
   return (
-    <div className="case-file">
-      {evidence.length > 0 && (
-        <div className="case-section">
-          <div className="case-file-heading">Evidence Summary</div>
-          <ul className="evidence-list">
-            {evidence.map((item, i) => {
-              const noData = /0|None|No traces|NO DATAPOINTS/i.test(item) || isInsufficient;
+    <div className="case-file rca-layout">
+      {/* Incident */}
+      {parsed.incident.lambda && (
+        <div className="rca-section rca-incident">
+          <div className="case-file-heading">Incident</div>
+          <div className="rca-kv-list">
+            <div className="rca-kv"><span className="rca-kv-key">Lambda</span><span className="rca-kv-val rca-mono">{parsed.incident.lambda}</span></div>
+            {parsed.incident.symptom && (
+              <div className="rca-kv"><span className="rca-kv-key">Symptom</span><span className="rca-kv-val">{parsed.incident.symptom}</span></div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Configuration */}
+      {parsed.configuration.length > 0 && (
+        <div className="rca-section rca-config">
+          <div className="case-file-heading">Configuration</div>
+          <div className="rca-config-grid">
+            {parsed.configuration.map((item, i) => {
+              const colonIdx = item.indexOf(':');
+              const label = colonIdx >= 0 ? item.slice(0, colonIdx).trim() : item;
+              const val = colonIdx >= 0 ? item.slice(colonIdx + 1).trim() : '';
               return (
-                <li key={i} className="evidence-item">
-                  <span className={`evidence-icon ${noData ? 'warn' : 'good'}`}>
-                    {noData ? <TriangleAlert size={14} /> : <CheckCircle2 size={14} />}
+                <div className="rca-config-item" key={i}>
+                  <span className="rca-config-label">{label}</span>
+                  <span className="rca-config-value">{val || '—'}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Evidence */}
+      {parsed.evidence.length > 0 && (
+        <div className="rca-section rca-evidence">
+          <div className="case-file-heading">Evidence</div>
+          <ul className="rca-evidence-list">
+            {parsed.evidence.map((item, i) => {
+              const noData = /\b0\b|None|No traces|NO DATAPOINTS|zero matches|zero traces|no signal/i.test(item) || parsed.isInsufficient;
+              return (
+                <li className={`rca-evidence-row ${noData ? 'is-warn' : ''}`} key={i}>
+                  <span className="rca-evidence-icon">
+                    {noData ? <TriangleAlert size={13} /> : <CheckCircle2 size={13} />}
                   </span>
-                  <span>{item.replace(/\*\*(.*?)\*\*/g, '$1')}</span>
+                  <span className="rca-evidence-text">{item}</span>
                 </li>
               );
             })}
           </ul>
         </div>
       )}
-      <div className="case-section">
-        <div className="case-file-heading">Root Cause Analysis</div>
-        <p className={isInsufficient ? "text-warn" : ""}>{rootCause.replace(/\*\*(.*?)\*\*/g, '$1')}</p>
-      </div>
+
+      {/* Root Cause */}
+      {parsed.rootCauseHeadline && (
+        <div className="rca-section rca-root-cause">
+          <div className="rca-root-cause-header">
+            <div className="case-file-heading">Root Cause</div>
+            {parsed.confidence !== null && (
+              <div className="rca-confidence-badge">
+                <svg viewBox="0 0 36 36" className="rca-confidence-ring">
+                  <circle cx="18" cy="18" r="15.5" className="rca-conf-track" />
+                  <circle cx="18" cy="18" r="15.5" className="rca-conf-fill"
+                    strokeDasharray={`${parsed.confidence} ${100 - parsed.confidence}`}
+                    strokeDashoffset="25"
+                  />
+                </svg>
+                <span className="rca-confidence-num">{parsed.confidenceStr}</span>
+              </div>
+            )}
+          </div>
+          <p className="rca-root-cause-text">{parsed.rootCauseHeadline}</p>
+        </div>
+      )}
+
+      {/* Why */}
+      {parsed.why.length > 0 && (
+        <div className="rca-section rca-why">
+          <div className="case-file-heading">Why</div>
+          <ol className="rca-why-list">
+            {parsed.why.map((reason, i) => (
+              <li key={i}>{reason}</li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {/* Recommended Action */}
+      {parsed.actionDescription && (
+        <div className="rca-section rca-action">
+          <div className="case-file-heading">Recommended Action</div>
+          <p className="rca-body-text">{parsed.actionDescription}</p>
+          {parsed.experimentSteps.length > 0 && (
+            <div className="rca-experiment">
+              <div className="rca-experiment-label">Proposed experiment</div>
+              {parsed.experimentSteps.map((step, i) => (
+                <div className="rca-experiment-step" key={i}>
+                  <span className="rca-step-arrow">→</span>
+                  <span>{step}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Expected Result */}
+      {parsed.expectedResult.length > 0 && (
+        <div className="rca-section rca-expected">
+          <div className="case-file-heading">Expected Result</div>
+          <div className="rca-expected-list">
+            {parsed.expectedResult.map((item, i) => {
+              const isDown = /↓|decrease|drop|reduce/i.test(item);
+              const isUp = /↑|increase/i.test(item);
+              return (
+                <div className={`rca-expected-item ${isDown ? 'is-good' : isUp ? 'is-bad' : ''}`} key={i}>
+                  <span className="rca-expected-arrow">{isDown ? '↓' : isUp ? '↑' : '→'}</span>
+                  <span>{item.replace(/[↓↑→]/g, '').trim()}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Risk */}
+      {parsed.risk && (
+        <div className="rca-section rca-risk">
+          <div className="case-file-heading">Risk</div>
+          <div className="rca-risk-row">
+            <span className={`rca-risk-badge ${riskClass}`}>{parsed.risk.level}</span>
+            <span className="rca-risk-reason">{parsed.risk.reason}</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -99,9 +299,9 @@ function CaseFileText({ text }) {
 function extractDiffRows(text) {
   if (!text) return null;
   const rows = [];
-  const rowPattern = /^[-*\s]*\*{0,2}([\w\s]{2,30}?)\*{0,2}\s*[:\-]?\s*([^\n]*?)\s*(?:→|->)\s*([^\n]+)$/;
   text.split('\n').forEach(line => {
-    const m = line.trim().match(rowPattern);
+    const cleanLine = line.trim().replace(/\*/g, '');
+    const m = cleanLine.match(/^[-]*\s*([^:]+?)\s*[:\-]\s*(.*?)\s*(?:→|->)\s*(.+)$/);
     if (m && m[2] && m[3]) {
       rows.push({ key: m[1].trim(), from: m[2].trim(), to: m[3].trim() });
     }
@@ -227,8 +427,26 @@ export default function App() {
     fetch(API_URL + `/incidents/metrics?functionName=${encodeURIComponent(functionName)}`)
       .then(res => res.json())
       .then(data => {
-        setLatencyData((data.durationData || []).map(d => ({ time: formatChartTime(d.timestamp), latency: d.latency })));
-        setThrottleData((data.throttleData || []).map(d => ({ time: formatChartTime(d.timestamp), throttles: d.throttles })));
+        // Debug: log first datapoint to see what the API actually sends
+        const dur = data.durationData || [];
+        const thr = data.throttleData || [];
+        if (dur.length) console.log('[metrics] first duration point:', JSON.stringify(dur[0]));
+
+        // The backend generates 1-minute intervals over the last hour.
+        // Compute timestamps client-side as fallback when the API field is missing.
+        const now = Date.now();
+        const getTime = (arr, i, d) => {
+          const raw = d.timestamp || d.Timestamp || d.time;
+          if (raw) {
+            const parsed = new Date(raw);
+            if (!isNaN(parsed.valueOf())) return formatChartTime(parsed);
+          }
+          // Fallback: derive from array position (arr.length points, 1 minute apart, ending now)
+          return formatChartTime(new Date(now - (arr.length - 1 - i) * 60_000));
+        };
+
+        setLatencyData(dur.map((d, i) => ({ time: getTime(dur, i, d), latency: d.latency })));
+        setThrottleData(thr.map((d, i) => ({ time: getTime(thr, i, d), throttles: d.throttles })));
         setLoadingMetrics(false);
       })
       .catch(err => {

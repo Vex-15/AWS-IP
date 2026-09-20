@@ -793,6 +793,346 @@ button {
   margin-top: 0;
 }
 
+/* ── RCA structured layout ──────────────────────────────────────────── */
+
+.rca-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rca-section {
+  padding: 14px 16px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  border-left: 3px solid var(--line-strong);
+  animation: rcaFadeIn 0.35s ease both;
+}
+
+.rca-section:nth-child(1) { animation-delay: 0s; }
+.rca-section:nth-child(2) { animation-delay: 0.04s; }
+.rca-section:nth-child(3) { animation-delay: 0.08s; }
+.rca-section:nth-child(4) { animation-delay: 0.12s; }
+.rca-section:nth-child(5) { animation-delay: 0.16s; }
+.rca-section:nth-child(6) { animation-delay: 0.20s; }
+.rca-section:nth-child(7) { animation-delay: 0.24s; }
+.rca-section:nth-child(8) { animation-delay: 0.28s; }
+
+@keyframes rcaFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Shared body text */
+.rca-body-text {
+  font-size: 0.9rem;
+  color: var(--text);
+  line-height: 1.65;
+  margin-top: 6px;
+}
+
+/* Incident — key-value list */
+.rca-incident { border-left-color: var(--amber); }
+
+.rca-kv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.rca-kv {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.rca-kv-key {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text-faint);
+  min-width: 68px;
+  flex-shrink: 0;
+}
+
+.rca-kv-val {
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.rca-mono {
+  font-family: var(--font-mono);
+  color: var(--amber);
+}
+
+/* Configuration grid */
+.rca-config { border-left-color: var(--text-faint); }
+
+.rca-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px 18px;
+  margin-top: 8px;
+}
+
+@media (max-width: 600px) {
+  .rca-config-grid { grid-template-columns: 1fr; }
+}
+
+.rca-config-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.rca-config-label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.rca-config-value {
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+/* Evidence — full-width list */
+.rca-evidence { border-left-color: var(--cyan); }
+
+.rca-evidence-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 0;
+}
+
+.rca-evidence-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.02);
+  font-size: 0.86rem;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.rca-evidence-row.is-warn {
+  background: rgba(245, 166, 35, 0.06);
+}
+
+.rca-evidence-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  margin-top: 2px;
+  color: var(--green);
+}
+
+.rca-evidence-row.is-warn .rca-evidence-icon {
+  color: var(--amber);
+}
+
+.rca-evidence-text {
+  flex: 1;
+}
+
+/* Root Cause */
+.rca-root-cause {
+  border-left-color: var(--red);
+  background: linear-gradient(135deg, rgba(239, 69, 101, 0.06), var(--bg-inset) 55%);
+}
+
+.rca-root-cause-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.rca-root-cause-text {
+  font-size: 0.92rem;
+  color: var(--text);
+  line-height: 1.65;
+  margin-top: 10px;
+}
+
+.rca-confidence-badge {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 48px;
+  height: 48px;
+}
+
+.rca-confidence-ring {
+  width: 48px;
+  height: 48px;
+  transform: rotate(-90deg);
+}
+
+.rca-conf-track {
+  fill: none;
+  stroke: rgba(255,255,255,0.06);
+  stroke-width: 3;
+}
+
+.rca-conf-fill {
+  fill: none;
+  stroke: var(--amber);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.8s ease;
+}
+
+.rca-confidence-num {
+  position: absolute;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--amber);
+  white-space: nowrap;
+}
+
+/* Why */
+.rca-why { border-left-color: var(--amber); }
+
+.rca-why-list {
+  margin: 8px 0 0 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.88rem;
+  color: var(--text);
+  line-height: 1.55;
+}
+
+.rca-why-list li {
+  padding-left: 4px;
+}
+
+.rca-why-list li::marker {
+  color: var(--amber);
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+/* Recommended Action */
+.rca-action { border-left-color: var(--cyan); }
+
+.rca-experiment {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: rgba(53, 214, 205, 0.05);
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(53, 214, 205, 0.12);
+}
+
+.rca-experiment-label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--cyan);
+  margin-bottom: 8px;
+}
+
+.rca-experiment-step {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.86rem;
+  color: var(--text);
+  padding: 3px 0;
+}
+
+.rca-step-arrow {
+  color: var(--cyan);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+/* Expected Result */
+.rca-expected { border-left-color: var(--green); }
+
+.rca-expected-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.rca-expected-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.86rem;
+  color: var(--text);
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.02);
+}
+
+.rca-expected-item.is-good { color: var(--green); }
+.rca-expected-item.is-bad  { color: var(--red); }
+
+.rca-expected-arrow {
+  font-weight: 700;
+  font-size: 1rem;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* Risk */
+.rca-risk { border-left-color: var(--text-faint); }
+
+.rca-risk-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.rca-risk-badge {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 3px 10px;
+  border-radius: 100px;
+  flex-shrink: 0;
+}
+
+.rca-risk-badge.risk-low {
+  background: var(--green-dim);
+  color: var(--green);
+}
+
+.rca-risk-badge.risk-med {
+  background: var(--amber-dim);
+  color: var(--amber);
+}
+
+.rca-risk-badge.risk-high {
+  background: rgba(239, 69, 101, 0.13);
+  color: var(--red);
+}
+
+.rca-risk-reason {
+  font-size: 0.86rem;
+  color: var(--text-dim);
+}
+
 .thinking-line {
   display: flex;
   align-items: center;

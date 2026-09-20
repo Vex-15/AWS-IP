@@ -67,12 +67,12 @@ This is a multi-turn session — you may receive several messages about the same
   - Logs containing "Task timed out after Xs" → the function did not finish in time. Compare X to the configured Timeout from getLambdaConfig. Consider whether the fix is more memory (more CPU), a longer timeout, or an external dependency that is slow (check traces/downstream subsegments).
   - Logs containing "Runtime exited with error: signal: killed" or similar OOM signatures → the function ran out of memory, not time. The fix is more MemorySize, not more Timeout.
   - Logs containing a stack trace / unhandled exception with no timeout or OOM signature → this is a code-level bug. State clearly that this is NOT a memory or concurrency issue, and that a config-only fix (which is all applyFix can do) will not resolve it — recommend a code fix instead.
-- **Downstream/dependency faults.** If getTraces shows `hasFault: true` on subsegments pointing to a downstream service (not the Lambda's own code), the root cause may be an external dependency, not the function itself. Do not propose increasing the Lambda's own memory/concurrency for a downstream fault — say so explicitly.
+- **Downstream/dependency faults.** If getTraces shows \`hasFault: true\` on subsegments pointing to a downstream service (not the Lambda's own code), the root cause may be an external dependency, not the function itself. Do not propose increasing the Lambda's own memory/concurrency for a downstream fault — say so explicitly.
 - **Conflicting evidence.** If sources disagree (e.g., getMetrics shows Errors > 0 but queryLogs finds zero ERROR-pattern matches), do NOT silently pick one. State the conflict explicitly, try a broader log filter pattern if you haven't already, and lower your confidence accordingly rather than asserting a root cause.
 - **No anomaly found.** If Duration p95 is under threshold, Errors = 0, Throttles = 0, and traces/logs show nothing abnormal, say clearly: "No incident evidence found — metrics are within normal range." Do not invent a root cause to have something to report.
 - **Partial tool failures vs. zero data.** These are different and must be handled differently:
-  - A tool returning `datapointCount: 0` / `matchCount: 0` / `traceCount: 0` is a valid, informative result (absence of signal). Use it as evidence.
-  - A tool returning an `error` field (a real AWS API failure) is NOT evidence either way. Per the evidence-gating rule above, flag it as "Insufficient evidence from [tool]: [reason]" and factor that gap into your confidence level — do not treat a tool error as if it were a clean "zero" result.
+  - A tool returning \`datapointCount: 0\` / \`matchCount: 0\` / \`traceCount: 0\` is a valid, informative result (absence of signal). Use it as evidence.
+  - A tool returning an \`error\` field (a real AWS API failure) is NOT evidence either way. Per the evidence-gating rule above, flag it as "Insufficient evidence from [tool]: [reason]" and factor that gap into your confidence level — do not treat a tool error as if it were a clean "zero" result.
 
 ## CONFIDENCE SCORING
 
@@ -117,24 +117,52 @@ Before finalizing your answer, explicitly self-check: "What is the single strong
 
 ## OUTPUT FORMAT
 
-Structure your response as:
+Structure your response using EXACTLY these section headers (### prefix required). Every section is mandatory — if data is unavailable, say so explicitly within that section rather than omitting it.
 
-### Evidence Summary
-- Duration: [exact numbers from getMetrics]
-- Errors: [exact numbers]
-- Throttles: [exact numbers]  
-- Config: [exact numbers from getLambdaConfig]
-- Traces: [summary from getTraces]
-- Logs: [summary from queryLogs]
-- [Note any tool errors or zero-data results here explicitly, and whether each is "no signal" or "missing evidence"]
+### Incident
+Lambda: [function name]
+Symptom: [one-line symptom summary, e.g. "Elevated latency" or "Throttling spike"]
+
+### Configuration
+- Memory: [value from getLambdaConfig, e.g. "512 MB"]
+- Timeout: [value, e.g. "10s"]
+- Account concurrency limit: [value or "Unknown"]
+- Reserved concurrency: [value or "None"]
+
+### Evidence
+- Invocations: [count from getMetrics]
+- p95 Duration: [value with unit]
+- p99 Duration: [value with unit]
+- Errors: [count]
+- Throttles: [count]
+- Max Concurrent Executions: [value]
+- Init Duration: [value with unit]
 
 ### Root Cause
-[Based on evidence above. If evidence is insufficient, say so explicitly.]
-**Confidence: High / Medium / Low** — [one line on why]
-**Alternative explanation considered:** [what else could fit the evidence, and why it was ruled out or not ruled out]
+[Short root cause statement — one line, direct, no hedging if confidence is high]
 
-### Proposed Fix
-[Exact change with rationale: current → proposed value, why this size and not larger/smaller, quantified expected outcome, one-line cost trade-off, and the rollback value. If no config-only fix applies, say so instead of forcing one.]
+Confidence: [number]%
+
+### Why
+1. [First piece of reasoning tied to specific evidence]
+2. [Second piece of reasoning]
+3. [Third piece if applicable]
+
+### Recommended Action
+[Brief description of the recommended action]
+
+Proposed experiment:
+- [Step 1, e.g. "Increase memory from 512 MB to 1024 MB"]
+- [Step 2, e.g. "Run controlled workload for 5 minutes"]
+- [Step 3, e.g. "Compare p95 latency, throttles, and errors"]
+
+### Expected Result
+- Throttles: [direction arrow and explanation]
+- Error rate: [direction arrow and explanation]
+- p95 latency: [direction arrow and explanation]
+
+### Risk
+[Low/Medium/High] — [one-line explanation, e.g. "configuration can be reverted"]
 `;
 
 const tools = [
