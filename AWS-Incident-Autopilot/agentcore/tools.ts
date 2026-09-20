@@ -42,7 +42,7 @@ export const getMetricsTool = tool({
 
       let raw: any[] = [];
       let attempts = 0;
-      const maxAttempts = 5; // Wait up to ~40 seconds for CW metrics to propagate
+      const maxAttempts = 9; // Wait up to ~90 seconds for CW metrics to propagate
 
       while (attempts < maxAttempts) {
         const response = await cwClient.send(
