@@ -4,6 +4,8 @@
    green = verified fixed. Everything else stays quiet.
    ─────────────────────────────────────────────────────────────────────── */
 
+@import './components/Proposedfix.css';
+
 :root {
   --bg: #0a0d12;
   --bg-raised: #12161d;
